@@ -149,11 +149,9 @@ const fixFileImports = (fileInfo: ImportInfo): boolean => {
       }
     });
 
-    // Boş satırları temizle
-    const cleanedLines = lines.filter((line) => line.trim() !== "");
-
     if (modified) {
-      fs.writeFileSync(fileInfo.filePath, cleanedLines.join("\n"), "utf8");
+      // Dosyayı olduğu gibi yaz, boş satırları koru
+      fs.writeFileSync(fileInfo.filePath, lines.join("\n"), "utf8");
       return true;
     }
 
