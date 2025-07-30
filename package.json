@@ -1,6 +1,6 @@
 {
   "name": "kedy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "React Native project automation CLI - Create screens, components, analyze projects, fix imports, find unused files and more!",
   "main": "dist/index.js",
   "bin": {
