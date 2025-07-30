@@ -1,0 +1,55 @@
+{
+  "name": "kedy",
+  "version": "1.0.0",
+  "description": "React Native project automation CLI - Create screens, components, analyze projects, fix imports, find unused files and more!",
+  "main": "dist/index.js",
+  "bin": {
+    "kedy": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postbuild": "echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "react-native",
+    "cli",
+    "component",
+    "screen",
+    "create",
+    "generate",
+    "automation",
+    "analyze",
+    "import",
+    "unused",
+    "delete",
+    "project",
+    "expo"
+  ],
+  "author": "Can Gürel <cangureliletisim@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ahmetcangurel/kedy"
+  },
+  "bugs": {
+    "url": "https://github.com/ahmetcangurel/kedy/issues"
+  },
+  "homepage": "https://github.com/ahmetcangurel/kedy#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "chalk": "^4.1.0",
+    "commander": "^7.2.0",
+    "fs-extra": "^10.1.0",
+    "inquirer": "^8.1.0",
+    "nanospinner": "^1.2.2"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

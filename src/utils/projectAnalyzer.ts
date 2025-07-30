@@ -1,0 +1,375 @@
+import fs from "fs-extra";
+import path from "path";
+import { logger } from "./logger";
+import {
+  analyzeArchitecture,
+  ArchitectureMetrics,
+} from "./architectureAnalyzer";
+import { analyzeTesting, TestingMetrics } from "./testingAnalyzer";
+import { analyzeSecurity, SecurityMetrics } from "./securityAnalyzer";
+
+export interface FileInfo {
+  path: string;
+  relativePath: string;
+  size: number;
+  lines: number;
+  type: "screen" | "component" | "hook" | "util" | "other";
+  imports: string[];
+  exports: string[];
+  complexity: number;
+  lastModified: Date;
+}
+
+export interface ProjectStats {
+  totalFiles: number;
+  totalLines: number;
+  totalSize: number;
+  screens: FileInfo[];
+  components: FileInfo[];
+  hooks: FileInfo[];
+  utils: FileInfo[];
+  others: FileInfo[];
+  unusedFiles: string[];
+  recommendations: string[];
+  // Analiz modülleri
+  architecture?: ArchitectureMetrics;
+  testing?: TestingMetrics;
+  security?: SecurityMetrics;
+}
+
+export interface AnalysisOptions {
+  detailed?: boolean;
+  screensOnly?: boolean;
+  componentsOnly?: boolean;
+  qualityOnly?: boolean;
+  json?: boolean;
+  html?: boolean;
+  // Analiz seçenekleri
+  architecture?: boolean;
+  testing?: boolean;
+  security?: boolean;
+  all?: boolean;
+}
+
+// Dosya türünü belirle
+const getFileType = (
+  filePath: string
+): "screen" | "component" | "hook" | "util" | "other" => {
+  const relativePath = filePath.replace(process.cwd(), "").substring(1);
+
+  if (relativePath.includes("/screens/")) return "screen";
+  if (relativePath.includes("/components/")) return "component";
+  if (relativePath.includes("/hooks/")) return "hook";
+  if (relativePath.includes("/utils/") || relativePath.includes("/helpers/"))
+    return "util";
+
+  return "other";
+};
+
+// Dosya satır sayısını hesapla
+const countLines = (content: string): number => {
+  return content.split("\n").length;
+};
+
+// Kod karmaşıklığını hesapla (basit versiyon)
+const calculateComplexity = (content: string): number => {
+  let complexity = 1;
+
+  // Conditional statements
+  complexity += (content.match(/if\s*\(/g) || []).length;
+  complexity += (content.match(/else\s*if\s*\(/g) || []).length;
+  complexity += (content.match(/switch\s*\(/g) || []).length;
+  complexity += (content.match(/case\s+/g) || []).length;
+
+  // Loops
+  complexity += (content.match(/for\s*\(/g) || []).length;
+  complexity += (content.match(/while\s*\(/g) || []).length;
+  complexity += (content.match(/forEach\s*\(/g) || []).length;
+  complexity += (content.match(/map\s*\(/g) || []).length;
+
+  // Functions
+  complexity += (content.match(/function\s+\w+/g) || []).length;
+  complexity += (content.match(/const\s+\w+\s*=\s*\(/g) || []).length;
+  complexity += (content.match(/=>\s*{/g) || []).length;
+
+  return complexity;
+};
+
+// Import'ları çıkar
+const extractImports = (content: string): string[] => {
+  const imports: string[] = [];
+
+  // ES6 imports
+  const importMatches = content.match(/import\s+.*\s+from\s+['"]([^'"]+)['"]/g);
+  if (importMatches) {
+    importMatches.forEach((match) => {
+      const pathMatch = match.match(/from\s+['"]([^'"]+)['"]/);
+      if (pathMatch) {
+        imports.push(pathMatch[1]);
+      }
+    });
+  }
+
+  // Require statements
+  const requireMatches = content.match(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
+  if (requireMatches) {
+    requireMatches.forEach((match) => {
+      const pathMatch = match.match(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+      if (pathMatch) {
+        imports.push(pathMatch[1]);
+      }
+    });
+  }
+
+  return imports;
+};
+
+// Export'ları çıkar
+const extractExports = (content: string): string[] => {
+  const exports: string[] = [];
+
+  // Named exports
+  const exportMatches = content.match(
+    /export\s+(?:const|function|class)\s+(\w+)/g
+  );
+  if (exportMatches) {
+    exportMatches.forEach((match) => {
+      const nameMatch = match.match(
+        /export\s+(?:const|function|class)\s+(\w+)/
+      );
+      if (nameMatch) {
+        exports.push(nameMatch[1]);
+      }
+    });
+  }
+
+  // Default exports
+  const defaultExportMatches = content.match(/export\s+default\s+(\w+)/g);
+  if (defaultExportMatches) {
+    defaultExportMatches.forEach((match) => {
+      const nameMatch = match.match(/export\s+default\s+(\w+)/);
+      if (nameMatch) {
+        exports.push(nameMatch[1]);
+      }
+    });
+  }
+
+  return exports;
+};
+
+// Dosyayı analiz et
+const analyzeFile = (filePath: string): FileInfo | null => {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    const stat = fs.statSync(filePath);
+
+    return {
+      path: filePath,
+      relativePath: filePath.replace(process.cwd(), "").substring(1),
+      size: stat.size,
+      lines: countLines(content),
+      type: getFileType(filePath),
+      imports: extractImports(content),
+      exports: extractExports(content),
+      complexity: calculateComplexity(content),
+      lastModified: stat.mtime,
+    };
+  } catch (error) {
+    logger.error(`Error analyzing file ${filePath}: ${error}`);
+    return null;
+  }
+};
+
+// Klasördeki tüm dosyaları bul
+const findProjectFiles = (
+  dir: string,
+  extensions: string[],
+  excludeDirs: string[]
+): string[] => {
+  const files: string[] = [];
+
+  const scanDirectory = (currentDir: string) => {
+    try {
+      const items = fs.readdirSync(currentDir);
+
+      items.forEach((item) => {
+        const fullPath = path.join(currentDir, item);
+        const stat = fs.statSync(fullPath);
+
+        if (stat.isDirectory()) {
+          const shouldExclude = excludeDirs.some(
+            (excludeDir) => fullPath.includes(excludeDir) || item === excludeDir
+          );
+
+          if (!shouldExclude) {
+            scanDirectory(fullPath);
+          }
+        } else if (stat.isFile()) {
+          const ext = path.extname(item);
+          if (extensions.includes(ext)) {
+            files.push(fullPath);
+          }
+        }
+      });
+    } catch (error) {
+      logger.error(`Error scanning directory ${currentDir}: ${error}`);
+    }
+  };
+
+  scanDirectory(dir);
+  return files;
+};
+
+// Kullanılmayan dosyaları bul
+const findUnusedFiles = (allFiles: FileInfo[]): string[] => {
+  const unusedFiles: string[] = [];
+
+  allFiles.forEach((file) => {
+    const isUsed = allFiles.some((otherFile) => {
+      if (otherFile.path === file.path) return false;
+      return otherFile.imports.some((importPath) => {
+        const fileName = path.basename(file.path, path.extname(file.path));
+        return importPath.includes(fileName);
+      });
+    });
+
+    if (!isUsed) {
+      unusedFiles.push(file.relativePath);
+    }
+  });
+
+  return unusedFiles;
+};
+
+// Optimizasyon skorunu hesapla
+
+// Önerileri oluştur
+const generateRecommendations = (stats: ProjectStats): string[] => {
+  const recommendations: string[] = [];
+
+  if (stats.unusedFiles.length > 0) {
+    recommendations.push(
+      `Remove ${stats.unusedFiles.length} unused files to clean up the codebase`
+    );
+  }
+
+  const highComplexityFiles = stats.components.filter((f) => f.complexity > 10);
+  if (highComplexityFiles.length > 0) {
+    recommendations.push(
+      `Consider refactoring ${highComplexityFiles.length} high-complexity components`
+    );
+  }
+
+  const largeScreens = stats.screens.filter((f) => f.lines > 200);
+  if (largeScreens.length > 0) {
+    recommendations.push(
+      `Split ${largeScreens.length} large screens into smaller components`
+    );
+  }
+
+  const reusableComponents = stats.components.filter((f) =>
+    stats.components.some(
+      (other) =>
+        other.path !== f.path &&
+        other.imports.some((imp) => {
+          const fileName = path.basename(f.path, path.extname(f.path));
+          return imp.includes(fileName);
+        })
+    )
+  );
+
+  if (reusableComponents.length < stats.components.length * 0.3) {
+    recommendations.push(
+      "Increase component reusability by extracting common patterns"
+    );
+  }
+
+  return recommendations;
+};
+
+// Projeyi analiz et
+export const analyzeProject = async (
+  config: any,
+  options: AnalysisOptions = {}
+): Promise<ProjectStats> => {
+  const { importAnalysis } = config;
+  const { fileExtensions, scanFolders, excludeFiles } = importAnalysis;
+
+  let allFiles: string[] = [];
+
+  // Belirtilen klasörleri tara
+  scanFolders.forEach((folder: string) => {
+    const folderPath = path.resolve(process.cwd(), folder);
+    if (fs.existsSync(folderPath)) {
+      const files = findProjectFiles(folderPath, fileExtensions, excludeFiles);
+      allFiles = [...allFiles, ...files];
+    }
+  });
+
+  // Dosyaları analiz et
+  const fileInfos = allFiles
+    .map(analyzeFile)
+    .filter((file): file is FileInfo => file !== null);
+
+  // Kategorilere ayır
+  const screens = fileInfos.filter((f) => f.type === "screen");
+  const components = fileInfos.filter((f) => f.type === "component");
+  const hooks = fileInfos.filter((f) => f.type === "hook");
+  const utils = fileInfos.filter((f) => f.type === "util");
+  const others = fileInfos.filter((f) => f.type === "other");
+
+  // İstatistikleri hesapla
+  const totalFiles = fileInfos.length;
+  const totalLines = fileInfos.reduce((sum, f) => sum + f.lines, 0);
+  const totalSize = fileInfos.reduce((sum, f) => sum + f.size, 0);
+
+  // Kullanılmayan dosyaları bul
+  const unusedFiles = findUnusedFiles(fileInfos);
+
+  // Önerileri oluştur
+  const recommendations = generateRecommendations({
+    totalFiles,
+    totalLines,
+    totalSize,
+    screens,
+    components,
+    hooks,
+    utils,
+    others,
+    unusedFiles,
+    recommendations: [],
+  });
+
+  // Analiz modüllerini çalıştır
+  let architecture: ArchitectureMetrics | undefined;
+  let testing: TestingMetrics | undefined;
+  let security: SecurityMetrics | undefined;
+
+  if (options.all || options.architecture) {
+    architecture = analyzeArchitecture(process.cwd(), allFiles);
+  }
+
+  if (options.all || options.testing) {
+    testing = analyzeTesting(allFiles);
+  }
+
+  if (options.all || options.security) {
+    security = await analyzeSecurity(process.cwd(), allFiles);
+  }
+
+  return {
+    totalFiles,
+    totalLines,
+    totalSize,
+    screens,
+    components,
+    hooks,
+    utils,
+    others,
+    unusedFiles,
+    recommendations,
+    architecture,
+    testing,
+    security,
+  };
+};
